@@ -1,0 +1,142 @@
+#Version 2.1.3 - 21 Feb 2019
+
+# Changelog:
+# 2.1: 
+#      - moved email code as separate subroutine function; 
+#      - added optional debug CLI parameter
+# 2.1.2:
+#	- added cisco ASA support
+# 2.1.3:
+#	- added Cisco SB switch support
+
+###############################
+#### SEND EMAIL REPORT SUB ####
+###############################
+
+def emailreport():
+ import email, smtplib, ssl
+
+ from email import encoders
+ from email.mime.base import MIMEBase
+ from email.mime.multipart import MIMEMultipart
+ from email.mime.text import MIMEText
+
+ subject = "NetXMS->RANCID import report - " + sys.argv[1]
+ sender_email = "configmgmt@efellows.bg"
+ receiver_email = "rancid-admin-" + sys.argv[1] + "@rancid.efellows.bg"
+ #receiver_email = "blazarov@efellows.bg" #debug mode
+
+ # Create a multipart message and set headers
+ message = MIMEMultipart()
+ message["From"] = sender_email
+ message["To"] = receiver_email
+ message["Subject"] = subject
+ message["Bcc"] = receiver_email  # Recommended for mass emails
+
+ # Add body to email
+ message.attach(MIMEText(report, "plain"))
+
+ filename = "router.db.fromnetxms.unknown"  # In same directory as script
+
+ # Open PDF file in binary mode
+ with open(filename, "rb") as attachment:
+    # Add file as application/octet-stream
+    # Email client can usually download this automatically as attachment
+    part = MIMEBase("application", "octet-stream")
+    part.set_payload((attachment).read())
+
+ # Encode file in ASCII characters to send by email
+ encoders.encode_base64(part)
+
+ # Add header as key/value pair to attachment part
+ part.add_header(
+     "Content-Disposition",
+     "attachment; filename=router.db.fromnetxms.unknown.txt"
+ )
+
+ # Add attachment to message and convert message to string
+ message.attach(part)
+ text = message.as_string()
+
+ # Log in to server using secure context and send email
+
+ server = smtplib.SMTP('localhost')
+ if debugmode == 1:
+  server.set_debuglevel(1) #debug mode
+ server.sendmail(sender_email, receiver_email, text)
+ server.quit()
+
+import csv, sys, re, time
+
+starttime = time.time()
+
+if len(sys.argv) != 2 and len(sys.argv) != 3:
+ print("Please specify client group name as attribute!!!");
+ sys.exit()
+
+if len(sys.argv) == 3 and sys.argv[2] == "debug":
+ debugmode=1
+else:
+ debugmode=0
+
+routerdbfile = open("router.db", "w")
+w = csv.writer(routerdbfile, delimiter=";")
+
+unknowndevices = []
+importednodes = 0
+
+for node in [o for o in s.getAllObjects() if isinstance(o, objects.Node)]:
+ enabled = node.getCustomAttributes().get("RANCID_ENABLED")
+ if enabled != None and int(enabled) == 1 and node.getCustomAttributes().get("Client") == sys.argv[1]:
+  if debugmode == 1:
+   print "DEBUG: %s" % (node.getObjectName())
+  if re.match("^RouterOS", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "mikrotik"
+  elif re.match("^Cisco IOS", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "cisco"
+  elif re.match("^Cisco Adaptive Security Appliance", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "cisco"
+  elif re.match("^BIG-IP", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "big-ip"
+  elif re.match("^Palo Alto Networks", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "paloalto"
+  elif re.match("^Extreme", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "extreme"
+  elif re.match("^Cisco NX-OS", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "cisco-nx"
+  elif re.match("^S[FG][35]0\d-", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "cisco-sb"
+  elif re.match("procurve", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "hp"
+  elif re.match("^PowerConnect", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "dell"
+  elif re.match("^Fortigate", node.getSystemDescription(), re.IGNORECASE):
+   noderancidtype = "fortigate"
+  else:
+   noderancidtype = "***UNKNOWN***"
+   unknowndevices.append(node.getObjectName() + ";" + node.getPrimaryIP().getHostAddress() + ";" + node.getSystemDescription()) 
+  if noderancidtype != "***UNKNOWN***":
+   w.writerow([node.getPrimaryIP().getHostAddress(), noderancidtype, "up"])
+   importednodes += 1
+
+routerdbfile.close()
+
+endtime = time.time()
+
+report = """Import of NetXMS nodes to RANCID for """ + sys.argv[1] + """ Completed!
+Details:
+Execution time: """ + str(endtime-starttime) + """ Seconds
+Successfully imported nodes count: """ + str(importednodes) + """
+Failed to import nodes count: """ + str(len(unknowndevices)) + """ (unable to map device type based on SNMP sysDescription - See attachment for detailed report)"""
+
+
+if len(unknowndevices) > 0:
+ unknownrouterdbfile = open("router.db.fromnetxms.unknown", "w")
+ for unknowndevice in unknowndevices:
+  unknownrouterdbfile.write (unknowndevice + "\r\n")
+ unknownrouterdbfile.close()
+ emailreport()
+
+if debugmode == 1:
+ print report #debug mode
+ emailreport()
